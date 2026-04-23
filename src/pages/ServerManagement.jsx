@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   MapPin, Tag, Trash2, Flame, ChevronDown, Search, RefreshCw,
-  Loader2, AlertCircle, Plus, Edit2, Server, CheckCircle2, List,
+  Loader2, AlertCircle, Plus, Edit2, Server, CheckCircle2, List, Users,
 } from 'lucide-react'
 import Modal from '../components/ui/Modal.jsx'
 import { physicalMachinesApi, serversApi } from '../services/api.js'
@@ -445,6 +445,7 @@ export default function ServerManagement() {
                     <th>Location</th>
                     <th>Type</th>
                     <th>Capacity</th>
+                    <th>Users</th>
                     <th>Finalized For</th>
                     {canWrite && <th className="text-center">Toggle</th>}
                     {canWrite && <th className="text-center">Edit</th>}
@@ -454,7 +455,7 @@ export default function ServerManagement() {
                 <tbody>
                   {filteredMachines.length === 0 && (
                     <tr>
-                      <td colSpan={canWrite ? 10 : 7} className="text-center text-gray-400 py-10 text-sm">
+                      <td colSpan={canWrite ? 11 : 8} className="text-center text-gray-400 py-10 text-sm">
                         <Server size={24} className="mx-auto mb-2 text-gray-300" />
                         No machines found. {canWrite && 'Click "Add Machine" to register one.'}
                       </td>
@@ -488,6 +489,12 @@ export default function ServerManagement() {
                           }`}>{m.server_type}</span>
                         </td>
                         <td><span className="text-sm text-gray-700">{m.max_capacity}</span></td>
+                        <td>
+                          <span className="flex items-center gap-1.5 text-sm text-gray-700">
+                            <Users size={12} className="text-gray-400 flex-shrink-0" />
+                            {m.connected_users ?? 0}
+                          </span>
+                        </td>
                         <td>
                           {m.finalized_apps?.length > 0
                             ? <span className="flex flex-wrap gap-1">

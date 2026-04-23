@@ -41,6 +41,7 @@ function FinalizeModal({ open, onClose, onSaved, appId, existingEntry }) {
 
   const emptyForm = {
     machine_id:        '',
+    server_type:       'free',
     is_priority_group: false,
     management_port:   7505,
     ovpn_base64:       '',
@@ -75,6 +76,7 @@ function FinalizeModal({ open, onClose, onSaved, appId, existingEntry }) {
     if (existingEntry) {
       setForm({
         machine_id:        existingEntry.physical_machine_id || '',
+        server_type:       existingEntry.server_type         || 'free',
         is_priority_group: existingEntry.is_priority_group   ?? false,
         management_port:   existingEntry.management_port     ?? 7505,
         ovpn_base64:       existingEntry.ovpn_base64         || '',
@@ -110,6 +112,7 @@ function FinalizeModal({ open, onClose, onSaved, appId, existingEntry }) {
     setLoading(true); setError('')
     const payload = {
       machine_id:        Number(form.machine_id),
+      server_type:       form.server_type,
       is_priority_group: form.is_priority_group,
       management_port:   form.management_port,
       ss_port:           form.ss_port,
@@ -177,7 +180,7 @@ function FinalizeModal({ open, onClose, onSaved, appId, existingEntry }) {
                   const selected = Number(form.machine_id) === m.id
                   return (
                     <button type="button" key={m.id}
-                      onClick={() => set('machine_id', m.id)}
+                      onClick={() => { set('machine_id', m.id); set('server_type', m.server_type || 'free') }}
                       className={`w-full text-left flex items-center justify-between p-3 rounded-lg border transition-colors ${
                         selected
                           ? 'border-brand-purple bg-indigo-50'
@@ -230,6 +233,24 @@ function FinalizeModal({ open, onClose, onSaved, appId, existingEntry }) {
             <p className="font-mono text-xs text-gray-500">{existingEntry.ip_address}</p>
           </div>
         )}
+
+        {/* Server Type */}
+        <div>
+          <label className="form-label">Server Type <span className="text-red-400 ml-0.5">*</span></label>
+          <div className="relative">
+            <select
+              className="form-input appearance-none pr-8"
+              value={form.server_type}
+              onChange={e => set('server_type', e.target.value)}
+              disabled={isEdit}
+            >
+              <option value="free">Free</option>
+              <option value="premium">Premium</option>
+            </select>
+            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+          {isEdit && <p className="text-xs text-gray-400 mt-1">Server type cannot be changed after finalization.</p>}
+        </div>
 
         {/* Priority */}
         <div className="flex items-center gap-3 py-1">
