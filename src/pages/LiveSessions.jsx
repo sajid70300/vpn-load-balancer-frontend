@@ -5,20 +5,21 @@
  * Backend returns: { users: [...], total, skip, limit }
  *
  * Features:
- *  1. Server-side pagination — only 50 rows fetched per request (skip/limit)
+ *  1. Server-side pagination — configurable page size (50/100/500/1000)
  *  2. Server-side search — user_id, device_ip, server name, server IP via ILIKE
  *  3. App filter — consumed from Topbar's useAppSelector
  *  4. Live duration ticker — updates every second via setInterval (no API call)
  *  5. Silent auto-refresh — re-fetches current page every 30s without spinner;
  *     full loading spinner only on manual Refresh or page/filter/search change
+ *  6. Server IP column
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Activity, MapPin, Clock, Upload, Download, Search, RefreshCw, Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { Activity, MapPin, Clock, Upload, Download, Search, RefreshCw, Loader2, AlertCircle, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
 import { sessionsApi } from '../services/api.js'
 import { useAppSelector } from '../components/layout/Topbar.jsx'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE_OPTIONS = [50, 100, 500, 1000]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -51,14 +52,15 @@ function formatConnectedAt(connectedTimeStr) {
 // ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function LiveSessions() {
-  const [sessions,   setSessions]   = useState([])
-  const [total,      setTotal]      = useState(0)   // total matching rows from backend COUNT(*)
-  const [loading,    setLoading]    = useState(true) // full spinner — initial + manual refresh
-  const [error,      setError]      = useState('')
-  const [search,     setSearch]     = useState('')   // raw input value
-  const [debouncedSearch, setDebouncedSearch] = useState('') // sent to API after 400ms
-  const [now,        setNow]        = useState(() => Date.now()) // drives live duration ticker
-  const [page,       setPage]       = useState(0)               // 0-indexed
+  const [sessions,        setSessions]        = useState([])
+  const [total,           setTotal]           = useState(0)
+  const [loading,         setLoading]         = useState(true)
+  const [error,           setError]           = useState('')
+  const [search,          setSearch]          = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [now,             setNow]             = useState(() => Date.now())
+  const [page,            setPage]            = useState(0)
+  const [pageSize,        setPageSize]        = useState(50) // configurable page size
 
   // App filter comes from the Topbar selector (null = All Apps)
   const [selectedApp] = useAppSelector()
@@ -70,11 +72,12 @@ export default function LiveSessions() {
   }, [search])
 
   // ── Fetch a specific page from the backend ────────────────────────────────
-  const fetchPage = useCallback((currentPage, showSpinner) => {
+  const fetchPage = useCallback((currentPage, showSpinner, overridePageSize) => {
     if (showSpinner) setLoading(true)
     setError('')
 
-    const params = { skip: currentPage * PAGE_SIZE, limit: PAGE_SIZE }
+    const limit = overridePageSize ?? pageSize
+    const params = { skip: currentPage * limit, limit }
     if (selectedApp)            params.app_name = selectedApp.app_id
     if (debouncedSearch.trim()) params.search   = debouncedSearch.trim()
 
@@ -85,40 +88,47 @@ export default function LiveSessions() {
       })
       .catch(err => setError(err.message))
       .finally(() => { if (showSpinner) setLoading(false) })
-  }, [selectedApp, debouncedSearch])
+  }, [selectedApp, debouncedSearch, pageSize])
 
   // ── Initial load on mount ─────────────────────────────────────────────────
   useEffect(() => {
     fetchPage(0, true)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Re-fetch with full spinner when page changes ──────────────────────────
+  // ── Re-fetch when page changes ────────────────────────────────────────────
   useEffect(() => {
     fetchPage(page, true)
   }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Reset to page 0 and re-fetch when app filter or debounced search changes
+  // ── Reset to page 0 when search or app filter changes ─────────────────────
   useEffect(() => {
     setPage(0)
     fetchPage(0, true)
   }, [selectedApp, debouncedSearch]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Silent auto-refresh every 30s — no spinner, re-fetches current page ───
+  // ── When page size changes — reset to page 0 and re-fetch ─────────────────
+  function handlePageSizeChange(newSize) {
+    setPageSize(newSize)
+    setPage(0)
+    fetchPage(0, true, newSize) // pass newSize directly since state update is async
+  }
+
+  // ── Silent auto-refresh every 30s — no spinner ────────────────────────────
   useEffect(() => {
     const autoRefresh = setInterval(() => fetchPage(page, false), 30_000)
     return () => clearInterval(autoRefresh)
   }, [page, fetchPage])
 
-  // ── Live duration ticker — updates `now` every second, no API call ─────────
+  // ── Live duration ticker ──────────────────────────────────────────────────
   useEffect(() => {
     const ticker = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(ticker)
   }, [])
 
   // ── Pagination derived values ──────────────────────────────────────────────
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const startEntry = total === 0 ? 0 : page * PAGE_SIZE + 1
-  const endEntry   = Math.min((page + 1) * PAGE_SIZE, total)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const startEntry = total === 0 ? 0 : page * pageSize + 1
+  const endEntry   = Math.min((page + 1) * pageSize, total)
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -135,7 +145,7 @@ export default function LiveSessions() {
         </button>
       </div>
 
-      {/* Stat cards — total comes from backend COUNT(*), always accurate */}
+      {/* Stat cards */}
       <div className="grid grid-cols-4 gap-4">
         <div className="card p-5">
           <p className="text-sm text-gray-500 mb-3">Active Sessions</p>
@@ -146,7 +156,7 @@ export default function LiveSessions() {
           <p className="text-sm text-gray-500 mb-3">OpenVPN</p>
           <p className="text-3xl font-bold text-gray-900">
             {sessions.filter(s => s.protocol === 'openvpn').length}
-            {total > PAGE_SIZE && <span className="text-sm font-normal text-gray-400 ml-1">this page</span>}
+            {total > pageSize && <span className="text-sm font-normal text-gray-400 ml-1">this page</span>}
           </p>
           <div className="mt-3"><span className="tag-openvpn text-xs">Protocol</span></div>
         </div>
@@ -154,7 +164,7 @@ export default function LiveSessions() {
           <p className="text-sm text-gray-500 mb-3">Shadowsocks</p>
           <p className="text-3xl font-bold text-gray-900">
             {sessions.filter(s => s.protocol === 'shadowsocks').length}
-            {total > PAGE_SIZE && <span className="text-sm font-normal text-gray-400 ml-1">this page</span>}
+            {total > pageSize && <span className="text-sm font-normal text-gray-400 ml-1">this page</span>}
           </p>
           <div className="mt-3"><span className="tag-shadowsocks text-xs">Protocol</span></div>
         </div>
@@ -164,7 +174,7 @@ export default function LiveSessions() {
             {formatBytes(sessions.reduce((sum, s) => sum + (s.bytes_received || 0) + (s.bytes_sent || 0), 0))}
           </p>
           <p className="text-xs text-gray-400 mt-2">
-            {total > PAGE_SIZE ? 'This page' : 'Combined transfer'}
+            {total > pageSize ? 'This page' : 'Combined transfer'}
           </p>
         </div>
       </div>
@@ -180,9 +190,11 @@ export default function LiveSessions() {
 
       {/* Table */}
       <div className="card overflow-hidden">
-        <div className="px-5 py-4 border-b border-surface-border">
-          <h3 className="text-sm font-semibold text-gray-800 mb-3">Active Connections</h3>
-          <div className="relative">
+
+        {/* Table header — search + page size selector */}
+        <div className="px-5 py-4 border-b border-surface-border flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-gray-800 flex-shrink-0">Active Connections</h3>
+          <div className="relative flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
@@ -192,16 +204,32 @@ export default function LiveSessions() {
               className="w-full pl-9 pr-4 py-2 text-sm border border-surface-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-purple"
             />
           </div>
+          {/* Page size selector */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs text-gray-500 whitespace-nowrap">Rows per page</span>
+            <div className="relative">
+              <select
+                value={pageSize}
+                onChange={e => handlePageSizeChange(Number(e.target.value))}
+                className="appearance-none pl-3 pr-8 py-2 text-sm border border-surface-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-purple cursor-pointer"
+              >
+                {PAGE_SIZE_OPTIONS.map(size => (
+                  <option key={size} value={size}>{size}</option>
+                ))}
+              </select>
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
         </div>
 
-        {/* Full loading spinner — on initial load, manual refresh, page/filter change */}
+        {/* Full loading spinner */}
         {loading && (
           <div className="flex items-center justify-center py-16">
             <Loader2 size={24} className="animate-spin text-brand-purple" />
           </div>
         )}
 
-        {/* Table — renders after load completes */}
+        {/* Table */}
         {!loading && (
           <>
             <div className="overflow-x-auto">
@@ -211,6 +239,7 @@ export default function LiveSessions() {
                     <th>User ID</th>
                     <th>Device IP</th>
                     <th>Server</th>
+                    <th>Server IP</th>
                     <th>App</th>
                     <th>Protocol</th>
                     <th>Duration</th>
@@ -222,7 +251,7 @@ export default function LiveSessions() {
                 <tbody>
                   {sessions.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="text-center text-gray-400 py-10 text-sm">
+                      <td colSpan={10} className="text-center text-gray-400 py-10 text-sm">
                         {total === 0 ? 'No active sessions' : 'No sessions match your search'}
                       </td>
                     </tr>
@@ -237,6 +266,7 @@ export default function LiveSessions() {
                           {s.server_name}
                         </span>
                       </td>
+                      <td><span className="font-mono text-xs text-gray-600">{s.server_ip || '—'}</span></td>
                       <td><span className="text-sm text-gray-600">{s.app_name || '—'}</span></td>
                       <td>
                         {s.protocol === 'openvpn'
