@@ -47,6 +47,12 @@ const NOTIF_CONFIG = {
     bg:    'bg-red-50',
     label: 'Server Down',
   },
+  server_recovered: {
+    icon:  Server,
+    color: 'text-green-500',
+    bg:    'bg-green-50',
+    label: 'Server Recovered',
+  },
   capacity_reached: {
     icon:  Users,
     color: 'text-amber-500',
