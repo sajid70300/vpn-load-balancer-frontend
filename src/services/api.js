@@ -190,9 +190,10 @@ export const sessionsApi = {
 
 // ─── Protocol Metrics ────────────────────────────────────────────────────────
 export const metricsApi = {
-  summary:       (params) => get('/admin/metrics/summary', params),
-  protocols:     (params) => get('/admin/metrics/protocols', params),
-  resetCooldown: (id)     => post(`/admin/metrics/${id}/reset-cooldown`),
+  summary:          (params) => get('/admin/metrics/summary', params),
+  protocols:        (params) => get('/admin/metrics/protocols', params),
+  protocolsByCountry: (params) => get('/admin/metrics/protocols/by-country', params),
+  resetCooldown:    (id)     => post(`/admin/metrics/${id}/reset-cooldown`),
 }
 
 

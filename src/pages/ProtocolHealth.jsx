@@ -17,49 +17,6 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { Shield, TrendingUp, Calendar, Search, Loader2, AlertCircle } from 'lucide-react'
 import { metricsApi } from '../services/api.js'
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Group per-server protocol metrics by country.
- *  Sums success_count and total_attempts across all servers in that country,
- *  then computes the real success rate from the totals.
- *  Averaging pre-computed rates would be wrong when servers have different
- *  sample sizes (a server with 1000 attempts would be weighted same as one
- *  with 1 attempt).
- */
-function aggregateByCountry(metrics) {
-  const map = {}
-  // { country: { openvpn: { success, total }, shadowsocks: { success, total } } }
-
-  for (const m of metrics) {
-    if (!m.country) continue
-    if (m.protocol !== 'openvpn' && m.protocol !== 'shadowsocks') continue
-
-    if (!map[m.country]) {
-      map[m.country] = {
-        openvpn:     { success: 0, total: 0 },
-        shadowsocks: { success: 0, total: 0 },
-      }
-    }
-    map[m.country][m.protocol].success += (m.success_count || 0)
-    map[m.country][m.protocol].total   += (m.total_attempts || 0)
-  }
-
-  return Object.entries(map)
-    .map(([country, proto], i) => ({
-      sno:    i + 1,
-      country,
-      openvpn: proto.openvpn.total > 0
-        ? +((proto.openvpn.success / proto.openvpn.total) * 100).toFixed(1)
-        : null,
-      shadowsocks: proto.shadowsocks.total > 0
-        ? +((proto.shadowsocks.success / proto.shadowsocks.total) * 100).toFixed(1)
-        : null,
-      openvpn_attempts:     proto.openvpn.total,
-      shadowsocks_attempts: proto.shadowsocks.total,
-    }))
-    .sort((a, b) => a.country.localeCompare(b.country))
-}
-
 // ─── Main Component ────────────────────────────────────────────────────────────
 export default function ProtocolHealth() {
   const [summary,       setSummary]       = useState(null)
@@ -67,16 +24,18 @@ export default function ProtocolHealth() {
   const [loading,       setLoading]       = useState(true)
   const [error,         setError]         = useState('')
   const [countryFilter, setCountryFilter] = useState('')
+  const [currentPage,   setCurrentPage]   = useState(1)
+  const PAGE_SIZE = 30
 
   const load = useCallback(() => {
     setLoading(true); setError('')
     Promise.all([
       metricsApi.summary(),
-      metricsApi.protocols({ min_attempts: 1 }),
+      metricsApi.protocolsByCountry({ min_attempts: 1 }),
     ])
-      .then(([sum, proto]) => {
+      .then(([sum, byCountry]) => {
         setSummary(sum)
-        setCountryRows(aggregateByCountry(proto.metrics || []))
+        setCountryRows(byCountry.countries || [])
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
@@ -95,6 +54,15 @@ export default function ProtocolHealth() {
   const filtered = countryRows.filter(r =>
     r.country.toLowerCase().includes(countryFilter.toLowerCase())
   )
+
+  const totalPages  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const safePage    = Math.min(currentPage, totalPages)
+  const paginated   = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  const handleFilterChange = (e) => {
+    setCountryFilter(e.target.value)
+    setCurrentPage(1)
+  }
 
   const protocols = [
     { key: 'openvpn',     label: 'OpenVPN',     color: 'text-brand-purple', stats: ovpnStats },
@@ -183,7 +151,7 @@ export default function ProtocolHealth() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <div className="relative">
                     <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input type="text" value={countryFilter} onChange={e => setCountryFilter(e.target.value)}
+                    <input type="text" value={countryFilter} onChange={handleFilterChange}
                       placeholder="Filter by Country..."
                       className="pl-8 pr-3 py-1.5 text-sm border border-surface-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-purple w-44" />
                   </div>
@@ -209,14 +177,14 @@ export default function ProtocolHealth() {
                     </td>
                   </tr>
                 )}
-                {filtered.map((row, i) => (
+                {paginated.map((row, i) => (
                   <tr key={row.country}>
-                    <td className="text-gray-500">{i + 1}</td>
+                    <td className="text-gray-500">{(safePage - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="font-semibold text-gray-800">{row.country}</td>
                     <td>
-                      {row.openvpn != null
+                      {row.openvpn_success_rate != null
                         ? <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-600">
-                            {row.openvpn}%
+                            {row.openvpn_success_rate}%
                             <TrendingUp size={13} />
                             <span className="text-xs text-gray-400 font-normal">({row.openvpn_attempts} attempts)</span>
                           </span>
@@ -224,9 +192,9 @@ export default function ProtocolHealth() {
                       }
                     </td>
                     <td>
-                      {row.shadowsocks != null
+                      {row.shadowsocks_success_rate != null
                         ? <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-600">
-                            {row.shadowsocks}%
+                            {row.shadowsocks_success_rate}%
                             <TrendingUp size={13} />
                             <span className="text-xs text-gray-400 font-normal">({row.shadowsocks_attempts} attempts)</span>
                           </span>
@@ -237,6 +205,54 @@ export default function ProtocolHealth() {
                 ))}
               </tbody>
             </table>
+            {totalPages > 1 && (
+              <div className="px-5 py-3 border-t border-surface-border flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-xs text-gray-400">
+                  Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length} countries
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={safePage === 1}
+                    className="px-3 py-1.5 text-xs rounded-lg border border-surface-border bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  {Array.from({ length: totalPages }, (_, idx) => idx + 1)
+                    .filter(p => p === 1 || p === totalPages || Math.abs(p - safePage) <= 2)
+                    .reduce((acc, p, i, arr) => {
+                      if (i > 0 && p - arr[i - 1] > 1) acc.push('...')
+                      acc.push(p)
+                      return acc
+                    }, [])
+                    .map((p, idx) =>
+                      p === '...' ? (
+                        <span key={`ellipsis-${idx}`} className="px-2 text-xs text-gray-400">…</span>
+                      ) : (
+                        <button
+                          key={p}
+                          onClick={() => setCurrentPage(p)}
+                          className={`px-3 py-1.5 text-xs rounded-lg border ${
+                            p === safePage
+                              ? 'bg-brand-purple text-white border-brand-purple'
+                              : 'border-surface-border bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      )
+                    )
+                  }
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={safePage === totalPages}
+                    className="px-3 py-1.5 text-xs rounded-lg border border-surface-border bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
