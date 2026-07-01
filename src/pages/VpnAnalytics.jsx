@@ -62,40 +62,82 @@ export default function VpnAnalytics() {
     return true
   })
 
-  // Per-server view: API already returns one entry per physical server.
-  // Just apply filters (excluding app filter) and map to the shape the table expects.
+  // Per-server view: the API returns one row per (physical server + app)
+  // combination — a single physical machine finalized for N apps produces
+  // N rows. Group those by (ip_address + server_type) into ONE row per
+  // physical server, with per-app user counts merged into `appUsers`.
   const groupedServers = React.useMemo(() => {
-    return servers
-      .filter(s => {
-        if (statusFilter === 'Active'   && !s.is_active)  return false
-        if (statusFilter === 'Inactive' &&  s.is_active)  return false
-        if (typeFilter   === 'Premium'  && s.server_type !== 'premium') return false
-        if (typeFilter   === 'Free'     && s.server_type !== 'free')    return false
-        if (priorityOnly && !s.is_priority_group) return false
-        return true
-      })
-      .map(s => ({
-        key:            `${s.ip_address}||${s.server_type}`,
-        ip_address:     s.ip_address,
-        name:           s.name,
-        server_type:    s.server_type,
-        display_order:  s.display_order,
-        server_city:    s.server_city,
-        server_country: s.server_country,
-        cpu_usage:      s.cpu_usage,
-        ram_usage:      s.ram_usage,
-        ping_latency_ms:s.ping_latency_ms,
-        peak_users:     s.peak_users,
-        peak_cpu:       s.peak_cpu,
-        peak_ram:       s.peak_ram,
-        is_active:      s.is_active,
-        is_priority_group: s.is_priority_group,
-        has_openvpn:    s.has_openvpn,
-        has_shadowsocks:s.has_shadowsocks,
-        // current_users is already combined (both protocols) from the API
-        totalUsers:     s.current_users || 0,
-        appUsers:       { [s.app_name]: s.current_users || 0 },
-      }))
+    const eligible = servers.filter(s => {
+      if (statusFilter === 'Active'   && !s.is_active)  return false
+      if (statusFilter === 'Inactive' &&  s.is_active)  return false
+      if (typeFilter   === 'Premium'  && s.server_type !== 'premium') return false
+      if (typeFilter   === 'Free'     && s.server_type !== 'free')    return false
+      if (priorityOnly && !s.is_priority_group) return false
+      return true
+    })
+
+    const groups = new Map()
+
+    for (const s of eligible) {
+      const key = `${s.ip_address}||${s.server_type}`
+      let group = groups.get(key)
+
+      if (!group) {
+        group = {
+          key,
+          ip_address:        s.ip_address,
+          name:              s.name,
+          server_type:       s.server_type,
+          display_order:     s.display_order,
+          server_city:       s.server_city,
+          server_country:    s.server_country,
+          // CPU/RAM/ping/peak are physical-machine facts (identical across
+          // app rows once the backend keeps them in sync) — the freshest
+          // reading among the grouped rows is used, picked below.
+          cpu_usage:         s.cpu_usage,
+          ram_usage:         s.ram_usage,
+          ping_latency_ms:   s.ping_latency_ms,
+          peak_cpu:          s.peak_cpu,
+          peak_ram:          s.peak_ram,
+          last_health_check: s.last_health_check,
+          is_active:         s.is_active,
+          is_priority_group: s.is_priority_group,
+          has_openvpn:       s.has_openvpn,
+          has_shadowsocks:   s.has_shadowsocks,
+          totalUsers:        0,
+          peak_users:        0,
+          appUsers:          {},
+        }
+        groups.set(key, group)
+      }
+
+      // current_users is already combined (both protocols) from the API
+      group.totalUsers += s.current_users || 0
+      // Peak users is genuinely per-app (each app tracks its own peak
+      // concurrent sessions) — combined here as the sum across apps.
+      group.peak_users += s.peak_users || 0
+      group.appUsers[s.app_name] = (group.appUsers[s.app_name] || 0) + (s.current_users || 0)
+
+      // Server-wide flags: true if ANY app row on this physical server has it
+      group.is_active         = group.is_active || s.is_active
+      group.is_priority_group = group.is_priority_group || s.is_priority_group
+      group.has_openvpn       = group.has_openvpn || s.has_openvpn
+      group.has_shadowsocks   = group.has_shadowsocks || s.has_shadowsocks
+      group.display_order     = Math.min(group.display_order, s.display_order)
+
+      // Use whichever grouped row was health-checked most recently as the
+      // representative CPU/RAM/ping/peak reading.
+      if (s.last_health_check && (!group.last_health_check || new Date(s.last_health_check) > new Date(group.last_health_check))) {
+        group.cpu_usage         = s.cpu_usage
+        group.ram_usage         = s.ram_usage
+        group.ping_latency_ms   = s.ping_latency_ms
+        group.peak_cpu          = s.peak_cpu
+        group.peak_ram          = s.peak_ram
+        group.last_health_check = s.last_health_check
+      }
+    }
+
+    return Array.from(groups.values())
       .sort((a, b) => (a.display_order || 0) - (b.display_order || 0))
   }, [servers, statusFilter, typeFilter, priorityOnly])
 
