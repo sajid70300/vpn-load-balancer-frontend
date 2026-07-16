@@ -4,8 +4,7 @@
  * Place this file at:  src/services/api.js
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const API_KEY  = import.meta.env.VITE_API_KEY  || 'your-api-key-here'
+const BASE_URL = import.meta.env.VITE_API_URL || ''
 
 // ─── Core fetch wrapper ───────────────────────────────────────────────────────
 async function request(path, options = {}) {
