@@ -226,6 +226,28 @@ export const globalSettingsApi = {
 export const statsApi = {
   summary: () => get('/admin/stats/summary'),
   apps:    () => get('/admin/stats/apps'),
+
+  /**
+   * GET /admin/stats/peak-users
+   * Returns: { peak_users, peak_at }
+   * All-time peak concurrent active-user count, updated every ~60s.
+   */
+  peakUsers: () => get('/admin/stats/peak-users'),
+
+  /**
+   * GET /admin/stats/user-history?range=24h|7d|30d|all
+   * Returns: { range, points: [{ recorded_at, total_users }] }
+   * Snapshots recorded roughly every 2 hours, for trend charting.
+   */
+  userHistory: (params) => get('/admin/stats/user-history', params),
+
+  /**
+   * GET /admin/stats/daily-peaks?month=YYYY-MM
+   * Returns: { month, days: [{ day, peak_users }] } — one entry per
+   * calendar day in the month (only up through today, for the current month).
+   * Derived from the same 2-hour history snapshots — no separate tracking.
+   */
+  dailyPeaks: (params) => get('/admin/stats/daily-peaks', params),
 }
 
 

@@ -15,8 +15,9 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
-import { Filter, Users, Server, TrendingUp, ChevronDown, Loader2, AlertCircle, RefreshCw, Shield, Radio, LayoutList, LayoutGrid } from 'lucide-react'
-import { serversApi, appsApi } from '../services/api.js'
+import { Filter, Users, Server, TrendingUp, ChevronDown, Loader2, AlertCircle, RefreshCw, Shield, Radio, LayoutList, LayoutGrid, History as HistoryIcon } from 'lucide-react'
+import { serversApi, appsApi, statsApi } from '../services/api.js'
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
 function ProtocolBadge({ protocol }) {
   return protocol === 'openvpn'
@@ -33,23 +34,74 @@ export default function VpnAnalytics() {
   const [typeFilter,   setTypeFilter]   = useState('All Types')
   const [appFilter,    setAppFilter]    = useState('All Apps')
   const [priorityOnly, setPriorityOnly] = useState(false)
-  const [viewMode,     setViewMode]     = useState('per-app') // 'per-app' | 'per-server'
+  const [viewMode,     setViewMode]     = useState('per-app') // 'per-app' | 'per-server' | 'history'
+
+  // All-time peak active users (updated by a backend Celery task every ~60s)
+  const [peakUsers, setPeakUsers] = useState(0)
+  const [peakAt,    setPeakAt]    = useState(null)
+
+  // Historical trend chart (snapshots recorded every ~2 hours on the backend)
+  const [historyRange,   setHistoryRange]   = useState('7d') // '24h' | '7d' | '30d' | 'all'
+  const [historyData,    setHistoryData]    = useState([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError,   setHistoryError]   = useState('')
+
+  // Monthly daily-peak chart — derived from the same 2-hour history data on
+  // the backend (no separate tracking); one bar per calendar day.
+  const [selectedMonth,     setSelectedMonth]     = useState(() => new Date().toISOString().slice(0, 7)) // 'YYYY-MM'
+  const [dailyPeaksData,    setDailyPeaksData]    = useState([])
+  const [dailyPeaksLoading, setDailyPeaksLoading] = useState(false)
+  const [dailyPeaksError,   setDailyPeaksError]   = useState('')
 
   const load = useCallback(() => {
     setLoading(true); setError('')
     Promise.all([
       serversApi.list({ limit: 500 }), // fetch all servers (backend default is 100; 500 is the backend's max) so totals aren't undercounted
       appsApi.list(),
+      statsApi.peakUsers(),
     ])
-      .then(([sData, aData]) => {
+      .then(([sData, aData, pData]) => {
         setServers(sData.servers || [])
         setApps(aData || [])
+        setPeakUsers(pData.peak_users || 0)
+        setPeakAt(pData.peak_at || null)
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Fetch history snapshots only when the History tab is active, or when the
+  // selected range changes — avoids an extra request on every normal page load.
+  useEffect(() => {
+    if (viewMode !== 'history') return
+    setHistoryLoading(true); setHistoryError('')
+    statsApi.userHistory({ range: historyRange })
+      .then(data => setHistoryData(data.points || []))
+      .catch(err => setHistoryError(err.message))
+      .finally(() => setHistoryLoading(false))
+  }, [viewMode, historyRange])
+
+  // Fetch daily-peak data for the selected month, same activation condition.
+  useEffect(() => {
+    if (viewMode !== 'history') return
+    setDailyPeaksLoading(true); setDailyPeaksError('')
+    statsApi.dailyPeaks({ month: selectedMonth })
+      .then(data => setDailyPeaksData(data.days || []))
+      .catch(err => setDailyPeaksError(err.message))
+      .finally(() => setDailyPeaksLoading(false))
+  }, [viewMode, selectedMonth])
+
+  // 'day' comes back as a plain 'YYYY-MM-DD' string (a calendar date, not a
+  // moment in time) — parsed via the local Date(y, m, d) constructor, never
+  // via new Date(dateString), which JS interprets as UTC midnight and can
+  // shift the displayed day by one depending on the viewer's timezone.
+  const dailyPeakDayNumber = (dateStr) => parseInt(dateStr.split('-')[2], 10)
+  const dailyPeakFullLabel = (dateStr) => {
+    const [y, m, d] = dateStr.split('-').map(Number)
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
+  }
 
   // Client-side filtering
   const filtered = servers.filter(s => {
@@ -194,28 +246,32 @@ export default function VpnAnalytics() {
       {/* Filters */}
       <div className="card px-4 py-3">
         <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-1.5 text-sm text-gray-500 font-medium">
-            <Filter size={14} /> Filters
-          </div>
-          {[
-            { label: statusFilter, opts: ['All Status', 'Active', 'Inactive'], set: setStatusFilter },
-            { label: typeFilter,   opts: ['All Types', 'Premium', 'Free'],     set: setTypeFilter },
-            ...(viewMode === 'per-app' ? [{ label: appFilter, opts: ['All Apps', ...appNames], set: setAppFilter }] : []),
-          ].map(({ label, opts, set }) => (
-            <div key={label} className="relative">
-              <select value={label} onChange={e => set(e.target.value)} className={selClass}>
-                {opts.map(o => <option key={o}>{o}</option>)}
-              </select>
-              <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-          ))}
-          <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer ml-1">
-            <button type="button" onClick={() => setPriorityOnly(!priorityOnly)}
-              className={`relative inline-flex h-5 w-9 rounded-full transition-colors ${priorityOnly ? 'bg-brand-purple' : 'bg-gray-200'}`}>
-              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5 ${priorityOnly ? 'translate-x-5' : 'translate-x-0.5'}`} />
-            </button>
-            Priority only
-          </label>
+          {viewMode !== 'history' && (
+            <>
+              <div className="flex items-center gap-1.5 text-sm text-gray-500 font-medium">
+                <Filter size={14} /> Filters
+              </div>
+              {[
+                { label: statusFilter, opts: ['All Status', 'Active', 'Inactive'], set: setStatusFilter },
+                { label: typeFilter,   opts: ['All Types', 'Premium', 'Free'],     set: setTypeFilter },
+                ...(viewMode === 'per-app' ? [{ label: appFilter, opts: ['All Apps', ...appNames], set: setAppFilter }] : []),
+              ].map(({ label, opts, set }) => (
+                <div key={label} className="relative">
+                  <select value={label} onChange={e => set(e.target.value)} className={selClass}>
+                    {opts.map(o => <option key={o}>{o}</option>)}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                </div>
+              ))}
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer ml-1">
+                <button type="button" onClick={() => setPriorityOnly(!priorityOnly)}
+                  className={`relative inline-flex h-5 w-9 rounded-full transition-colors ${priorityOnly ? 'bg-brand-purple' : 'bg-gray-200'}`}>
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5 ${priorityOnly ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button>
+                Priority only
+              </label>
+            </>
+          )}
 
           {/* View mode toggle */}
           <div className="ml-auto flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
@@ -231,8 +287,16 @@ export default function VpnAnalytics() {
             >
               <LayoutGrid size={13} /> Per Server
             </button>
+            <button
+              onClick={() => setViewMode('history')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'history' ? 'bg-white text-brand-purple shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              <HistoryIcon size={13} /> History
+            </button>
           </div>
-          <span className="text-xs text-gray-400">{viewMode === 'per-server' ? groupedServers.length : filtered.length} servers</span>
+          {viewMode !== 'history' && (
+            <span className="text-xs text-gray-400">{viewMode === 'per-server' ? groupedServers.length : filtered.length} servers</span>
+          )}
         </div>
       </div>
 
@@ -246,6 +310,12 @@ export default function VpnAnalytics() {
             </div>
             <p className="text-3xl font-bold text-brand-purple">{totalUsers.toLocaleString()}</p>
             <p className="text-xs text-gray-400 mt-1">Across filtered servers</p>
+            <p className="text-xs text-gray-500 mt-2 pt-2 border-t border-surface-border">
+              All-time peak: <span className="font-semibold text-gray-700">{peakUsers.toLocaleString()}</span>
+              {peakAt && (
+                <span className="block text-gray-400 mt-0.5">{new Date(peakAt).toLocaleString()}</span>
+              )}
+            </p>
           </div>
           <div className="p-5">
             <div className="flex items-center gap-2 mb-2">
@@ -294,9 +364,116 @@ export default function VpnAnalytics() {
         </div>
       </div>
 
-      {/* Servers table */}
+      {/* Servers table / History chart */}
       <div className="card overflow-hidden">
-        {loading ? (
+        {viewMode === 'history' ? (
+          /* ── History trend chart (snapshots every ~2 hours) ── */
+          <div className="p-5">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Active Users History</h3>
+                <p className="text-xs text-gray-400 mt-0.5">Snapshots recorded every ~2 hours</p>
+              </div>
+              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                {[
+                  { key: '24h', label: '24h' },
+                  { key: '7d',  label: '7 Days' },
+                  { key: '30d', label: '30 Days' },
+                  { key: 'all', label: 'All Time' },
+                ].map(opt => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setHistoryRange(opt.key)}
+                    className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${historyRange === opt.key ? 'bg-white text-brand-purple shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {historyLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 size={24} className="animate-spin text-brand-purple" />
+              </div>
+            ) : historyError ? (
+              <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
+                <p className="text-sm text-red-600">{historyError}</p>
+              </div>
+            ) : historyData.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-16">
+                No history data yet — snapshots are recorded every ~2 hours, check back soon.
+              </p>
+            ) : (
+              <ResponsiveContainer width="100%" height={320}>
+                <LineChart data={historyData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="recorded_at"
+                    tickFormatter={t => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric' })}
+                    tick={{ fontSize: 11 }}
+                    interval={Math.max(0, Math.ceil(historyData.length / 8) - 1)}
+                  />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip
+                    labelFormatter={t => new Date(t).toLocaleString()}
+                    formatter={v => [v, 'Active Users']}
+                  />
+                  <Line type="monotone" dataKey="total_users" stroke="#6366f1" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+
+            {/* ── Daily peak users (one value per calendar day, by month) ── */}
+            <div className="mt-8 pt-6 border-t border-surface-border">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">Daily Peak Users</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Highest recorded count each day, for the selected month</p>
+                </div>
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  max={new Date().toISOString().slice(0, 7)}
+                  onChange={e => setSelectedMonth(e.target.value)}
+                  className="text-xs border border-surface-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-purple"
+                />
+              </div>
+
+              {dailyPeaksLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 size={24} className="animate-spin text-brand-purple" />
+                </div>
+              ) : dailyPeaksError ? (
+                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                  <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
+                  <p className="text-sm text-red-600">{dailyPeaksError}</p>
+                </div>
+              ) : dailyPeaksData.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-16">No data recorded for this month yet.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={dailyPeaksData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis
+                      dataKey="day"
+                      tickFormatter={dailyPeakDayNumber}
+                      tick={{ fontSize: 11 }}
+                      interval={Math.max(0, Math.ceil(dailyPeaksData.length / 12) - 1)}
+                    />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip
+                      labelFormatter={dailyPeakFullLabel}
+                      formatter={v => [v, 'Peak Users']}
+                    />
+                    <Bar dataKey="peak_users" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        ) : loading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 size={24} className="animate-spin text-brand-purple" />
           </div>
