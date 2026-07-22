@@ -38,7 +38,7 @@ export default function VpnAnalytics() {
   const load = useCallback(() => {
     setLoading(true); setError('')
     Promise.all([
-      serversApi.list(),
+      serversApi.list({ limit: 500 }), // fetch all servers (backend default is 100; 500 is the backend's max) so totals aren't undercounted
       appsApi.list(),
     ])
       .then(([sData, aData]) => {
