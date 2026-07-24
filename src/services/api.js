@@ -232,7 +232,7 @@ export const statsApi = {
    * Returns: { peak_users, peak_at }
    * All-time peak concurrent active-user count, updated every ~60s.
    */
-  peakUsers: () => get('/admin/stats/peak-users'),
+  peakUsers: (params) => get('/admin/stats/peak-users', params),
 
   /**
    * GET /admin/stats/user-history?range=24h|7d|30d|all

@@ -58,13 +58,10 @@ export default function VpnAnalytics() {
     Promise.all([
       serversApi.list({ limit: 500 }), // fetch all servers (backend default is 100; 500 is the backend's max) so totals aren't undercounted
       appsApi.list(),
-      statsApi.peakUsers(),
     ])
-      .then(([sData, aData, pData]) => {
+      .then(([sData, aData]) => {
         setServers(sData.servers || [])
         setApps(aData || [])
-        setPeakUsers(pData.peak_users || 0)
-        setPeakAt(pData.peak_at || null)
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
@@ -72,26 +69,41 @@ export default function VpnAnalytics() {
 
   useEffect(() => { load() }, [load])
 
+  // Peak users — separate from load() above, and re-fetches whenever the
+  // selected app changes. Independent of viewMode: the peak card sits under
+  // "Total Active Users" and is visible on every tab, not just History.
+  useEffect(() => {
+    const params = appFilter !== 'All Apps' ? { app_name: appFilter } : {}
+    statsApi.peakUsers(params)
+      .then(data => {
+        setPeakUsers(data.peak_users || 0)
+        setPeakAt(data.peak_at || null)
+      })
+      .catch(() => { /* non-fatal — leave the last known value showing */ })
+  }, [appFilter])
+
   // Fetch history snapshots only when the History tab is active, or when the
-  // selected range changes — avoids an extra request on every normal page load.
+  // selected range or app changes — avoids an extra request on every normal page load.
   useEffect(() => {
     if (viewMode !== 'history') return
     setHistoryLoading(true); setHistoryError('')
-    statsApi.userHistory({ range: historyRange })
+    const params = { range: historyRange, ...(appFilter !== 'All Apps' ? { app_name: appFilter } : {}) }
+    statsApi.userHistory(params)
       .then(data => setHistoryData(data.points || []))
       .catch(err => setHistoryError(err.message))
       .finally(() => setHistoryLoading(false))
-  }, [viewMode, historyRange])
+  }, [viewMode, historyRange, appFilter])
 
-  // Fetch daily-peak data for the selected month, same activation condition.
+  // Fetch daily-peak data for the selected month + app, same activation condition.
   useEffect(() => {
     if (viewMode !== 'history') return
     setDailyPeaksLoading(true); setDailyPeaksError('')
-    statsApi.dailyPeaks({ month: selectedMonth })
+    const params = { month: selectedMonth, ...(appFilter !== 'All Apps' ? { app_name: appFilter } : {}) }
+    statsApi.dailyPeaks(params)
       .then(data => setDailyPeaksData(data.days || []))
       .catch(err => setDailyPeaksError(err.message))
       .finally(() => setDailyPeaksLoading(false))
-  }, [viewMode, selectedMonth])
+  }, [viewMode, selectedMonth, appFilter])
 
   // 'day' comes back as a plain 'YYYY-MM-DD' string (a calendar date, not a
   // moment in time) — parsed via the local Date(y, m, d) constructor, never
@@ -254,7 +266,6 @@ export default function VpnAnalytics() {
               {[
                 { label: statusFilter, opts: ['All Status', 'Active', 'Inactive'], set: setStatusFilter },
                 { label: typeFilter,   opts: ['All Types', 'Premium', 'Free'],     set: setTypeFilter },
-                ...(viewMode === 'per-app' ? [{ label: appFilter, opts: ['All Apps', ...appNames], set: setAppFilter }] : []),
               ].map(({ label, opts, set }) => (
                 <div key={label} className="relative">
                   <select value={label} onChange={e => set(e.target.value)} className={selClass}>
@@ -263,14 +274,29 @@ export default function VpnAnalytics() {
                   <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
               ))}
-              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer ml-1">
-                <button type="button" onClick={() => setPriorityOnly(!priorityOnly)}
-                  className={`relative inline-flex h-5 w-9 rounded-full transition-colors ${priorityOnly ? 'bg-brand-purple' : 'bg-gray-200'}`}>
-                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5 ${priorityOnly ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                </button>
-                Priority only
-              </label>
             </>
+          )}
+
+          {/* App filter — shown in Per App AND History modes. In History,
+              this is what scopes the peak card + both graphs to a single
+              app (or the combined total when 'All Apps' is selected). */}
+          {(viewMode === 'per-app' || viewMode === 'history') && (
+            <div className="relative">
+              <select value={appFilter} onChange={e => setAppFilter(e.target.value)} className={selClass}>
+                {['All Apps', ...appNames].map(o => <option key={o}>{o}</option>)}
+              </select>
+              <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            </div>
+          )}
+
+          {viewMode !== 'history' && (
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer ml-1">
+              <button type="button" onClick={() => setPriorityOnly(!priorityOnly)}
+                className={`relative inline-flex h-5 w-9 rounded-full transition-colors ${priorityOnly ? 'bg-brand-purple' : 'bg-gray-200'}`}>
+                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5 ${priorityOnly ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </button>
+              Priority only
+            </label>
           )}
 
           {/* View mode toggle */}
@@ -372,7 +398,9 @@ export default function VpnAnalytics() {
             <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
               <div>
                 <h3 className="text-sm font-semibold text-gray-800">Active Users History</h3>
-                <p className="text-xs text-gray-400 mt-0.5">Snapshots recorded every ~2 hours</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Snapshots recorded every ~30 minutes · {appFilter === 'All Apps' ? 'All Apps' : appFilter}
+                </p>
               </div>
               <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
                 {[
@@ -430,7 +458,9 @@ export default function VpnAnalytics() {
               <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                 <div>
                   <h3 className="text-sm font-semibold text-gray-800">Daily Peak Users</h3>
-                  <p className="text-xs text-gray-400 mt-0.5">Highest recorded count each day, for the selected month</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Highest recorded count each day, for the selected month · {appFilter === 'All Apps' ? 'All Apps' : appFilter}
+                  </p>
                 </div>
                 <input
                   type="month"
